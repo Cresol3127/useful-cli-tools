@@ -41,5 +41,5 @@ bash -n audiofetch/audiofetch
 
 MIT. See [LICENSE](LICENSE).
 
-AI disclosure: AI assisted with the coding; the ideas and project direction are
+**AI disclosure**: AI assisted with the coding; the ideas and project direction are
 the author's original work.

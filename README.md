@@ -30,13 +30,6 @@ and usage examples.
 - `appimage-update`: Python 3.11+, plus `appimageupdatetool` for AppImages that
   do not have a GitHub release source (Linux)
 
-## Tests
-
-```sh
-python3 -B -m unittest discover -s appimage-update -v
-bash -n audiofetch/audiofetch
-```
-
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -3,7 +3,6 @@
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -16,29 +15,6 @@ import tempfile
 import urllib.parse
 import urllib.request
 
-
-def find_nixos_root():
-    """Return the NixOS checkout when running as its packaged helper."""
-    override = os.environ.get("APPIMAGE_UPDATE_NIXOS_ROOT")
-    if override:
-        root = Path(override).expanduser().resolve()
-        if not (root / "prepare-source.py").is_file():
-            raise ValueError(f"APPIMAGE_UPDATE_NIXOS_ROOT is not a NixOS checkout: {root}")
-        return root
-    root = Path(__file__).resolve().parents[2]
-    if (root / "prepare-source.py").is_file() and (root / "pkgs/artcraft/update.py").is_file():
-        return root
-    return None
-
-
-ROOT = find_nixos_root()
-artcraft = None
-supported = {}
-if ROOT:
-    spec = importlib.util.spec_from_file_location("artcraft", ROOT / "pkgs/artcraft/update.py")
-    artcraft = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(artcraft)
-    supported = json.loads((ROOT / "pkgs/artcraft/sources.json").read_text())
 
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -473,16 +449,6 @@ def generic_tool():
         if path:
             return path
 
-    if ROOT:
-        source = subprocess.check_output(
-            ["python3", str(ROOT / "prepare-source.py")], text=True,
-        ).strip()
-        package = subprocess.check_output([
-            "nix", "build", "--no-update-lock-file", "--no-link", "--print-out-paths",
-            f"{source}#appimageupdate",
-        ], text=True).strip()
-        return str(Path(package) / "bin/appimageupdatetool")
-
     raise ValueError(
         "AppImageUpdate is not installed; install appimageupdatetool, set "
         "APPIMAGE_UPDATE_TOOL, or track the app with --add OWNER/REPO"
@@ -496,21 +462,12 @@ def run(images, apply=False, prune=False):
     tool = None
     failures = 0
     for image in images:
-        app = None
-        if artcraft:
-            app = next((app for app in supported if image in artcraft.local_images(image.parent, app)), None)
-        key = (image.parent, app) if app else image
-        if key in handled:
+        if image in handled:
             continue
-        handled.add(key)
+        handled.add(image)
         print(f"\n{'Updating' if apply else 'Checking'} {image.name}", flush=True)
         try:
-            if app:
-                artcraft.update_images(argparse.Namespace(
-                    directory=image.parent, app=[app], version=None,
-                    apply=apply, prune=prune,
-                ), [app])
-            elif str(image) in tracked:
+            if str(image) in tracked:
                 manifest_changed |= update_tracked(tracked[str(image)], apply=apply, prune=prune)
             else:
                 if tool is None:

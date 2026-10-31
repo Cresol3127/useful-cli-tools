@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import appimage_update as update
 
@@ -47,22 +47,14 @@ class BatchUpdateTests(unittest.TestCase):
         (self.directory / "linked.AppImage").symlink_to(image)
         self.assertEqual(update.discover([self.directory, image]), [image])
 
-    def test_artcraft_and_generic_apps_use_one_command(self):
-        first = self.image("filmcraft-1.0.0-linux-x86_64.AppImage")
-        second = self.image("filmcraft-2.0.0-linux-x86_64.AppImage")
-        generic = self.image("PineconeMC.AppImage")
-        fake_artcraft = MagicMock()
-        fake_artcraft.local_images.return_value = [first, second]
-        with patch.object(update, "artcraft", fake_artcraft), \
-             patch.object(update, "supported", ["filmcraft"]), \
-             patch.object(update, "generic_tool", return_value="updater") as tool, \
+    def test_untracked_apps_use_shared_appimageupdate_tool(self):
+        images = [self.image("first.AppImage"), self.image("second.AppImage")]
+        with patch.object(update, "generic_tool", return_value="updater") as tool, \
              patch.object(update.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run:
-            self.assertEqual(update.run([first, second, generic]), 0)
-        fake_artcraft.update_images.assert_called_once()
-        self.assertEqual(fake_artcraft.update_images.call_args.args[1], ["filmcraft"])
-        self.assertFalse(fake_artcraft.update_images.call_args.args[0].apply)
+            self.assertEqual(update.run(images), 0)
         tool.assert_called_once()
-        run.assert_called_once_with(["updater", "--check-for-update", str(generic)], cwd=self.directory)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args.args[0], ["updater", "--check-for-update", str(images[1])])
 
     def test_failures_do_not_stop_remaining_apps(self):
         images = [self.image("broken.AppImage"), self.image("working.AppImage")]

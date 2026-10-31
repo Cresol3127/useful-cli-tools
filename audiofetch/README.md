@@ -41,6 +41,8 @@ Search YouTube interactively:
 audiofetch
 ```
 
+![audiofetch's interactive fzf search for “never gonna give you up”](assets/fzf-search.png)
+
 Rewrite tags on existing files:
 
 ```sh
@@ -96,6 +98,20 @@ Dependencies: yt-dlp, ffmpeg, ffprobe, fzf (search mode)
   characters are removed.
 - `--tag` writes tags in place and may rename the file. Keep a backup if the
   metadata matters.
+
+## Acknowledgements
+
+`audiofetch` builds on excellent tools created and maintained by others:
+
+- [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) handles video search and downloads.
+- [FFmpeg](https://ffmpeg.org/) (`ffmpeg` and `ffprobe`) handles audio conversion
+  and metadata.
+- [`fzf`](https://github.com/junegunn/fzf) provides the interactive search UI.
+- [Bash](https://www.gnu.org/software/bash/) and standard Unix utilities provide
+  the scripting and text-processing foundation.
+
+This script would not have been possible without their work. Please see each
+project for its own license and contribution details.
 
 ## License
 

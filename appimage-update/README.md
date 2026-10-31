@@ -84,13 +84,21 @@ appimage-update --remove ~/Applications/Some.AppImage
 ### Options
 
 ```text
--c, --check            Check only (default)
--u, --update           Update existing AppImages
--p, --prune            Remove old copies (requires --update)
--a, --add REPO         Track a GitHub repo or URL; path optional
--r, --remove           Stop tracking an AppImage (keeps the file)
---asset REGEX          Select the matching release asset for --add
---arch ARCH            Select the release asset for this architecture
+usage: appimage-update [options] [path ...]
+
+Check or update AppImages.
+
+options:
+  -h, --help                 show this help message and exit
+  -c, --check                check only (default)
+  -u, --update               update existing AppImage files, not install new apps
+  -p, --prune, --remove-old  remove old copies (requires --update)
+  -a, --add REPO             track a GitHub repo or URL; path optional
+  -r, --remove               stop tracking an AppImage (keeps the file)
+  --asset REGEX              select the matching release asset for --add
+  --arch ARCH                select release asset for this architecture (default: host)
+
+Paths default to ~/Desktop and ~/Applications. Add by repo: --add OWNER/REPO or GitHub URL.
 ```
 
 Paths default to `~/Desktop` and `~/Applications`.

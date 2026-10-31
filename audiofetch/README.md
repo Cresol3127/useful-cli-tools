@@ -63,15 +63,26 @@ audiofetch --no-download 'https://www.youtube.com/watch?v=...'
 ### Options
 
 ```text
--h, --help             Show help
--f, --format <ext>     Audio format (opus, m4a, mp3, flac, etc.; default: opus)
--a, --album <name>     Override album name
--o, --output <dir>     Output directory (default: ~/Music)
---no-edit              Skip the metadata edit prompt
---no-download          Only show metadata
---tag                  Interactively edit one or more files
---dry-run              Show what would be done without changes
---no-album             Skip album metadata
+audiofetch — Download audio or rewrite song metadata
+
+Usage: audiofetch [options] <url>
+       audiofetch [options]            Interactive YouTube search (fzf), then download
+       audiofetch --tag [options] <file> [file ...]
+
+Download mode:
+  -h, --help             Show this help
+  -f, --format <ext>     Audio format (opus, m4a, mp3, flac, etc.) (default: opus)
+  -a, --album <name>     Override album name (e.g. "OST - Hollow Knight")
+  -o, --output <dir>     Output directory (default: ~/Music)
+  --no-edit              Skip metadata edit prompt
+  --no-download          Only show metadata (no download)
+
+Tag mode (rewrite a single file's metadata):
+  --tag                 Interactively edit one or more files' Artist/Title/Album
+  --dry-run             Show what would be done (no changes)
+  --no-album            Skip album metadata
+
+Dependencies: yt-dlp, ffmpeg, ffprobe, fzf (search mode)
 ```
 
 ## Notes

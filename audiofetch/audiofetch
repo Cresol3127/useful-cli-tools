@@ -103,6 +103,7 @@ tag=false
 no_edit=false
 no_dl=false
 dry=false
+verbose=false
 no_alb=false
 alb_override=""
 fmt="opus"
@@ -120,6 +121,7 @@ while [[ $# -gt 0 ]]; do
         --no-edit) no_edit=true; shift ;;
         --no-download) no_dl=true; shift ;;
         --dry-run) dry=true; shift ;;
+        --verbose) verbose=true; shift ;;
         --no-album) no_alb=true; shift ;;
         -*) echo -e "${R}Unknown option: $1${NC}"; usage ;;
         *) pos_files+=("$1"); shift ;;

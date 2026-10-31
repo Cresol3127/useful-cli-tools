@@ -1,7 +1,7 @@
 # useful-cli-tools
 
-A small monorepo of command-line tools for Linux. Each tool lives in its own
-directory and can be installed independently.
+A small monorepo of command-line tools for Unix-like systems and Linux desktops.
+Each tool lives in its own directory and can be installed independently.
 
 | Tool | What it does |
 | --- | --- |
@@ -25,9 +25,10 @@ and usage examples.
 
 ## Requirements
 
-- `audiofetch`: Bash, `yt-dlp`, `ffmpeg`, `ffprobe`, `fzf`
+- `audiofetch`: Bash, `yt-dlp`, `ffmpeg`, `ffprobe`, `fzf` (Linux, macOS, and
+  compatible Unix-like systems)
 - `appimage-update`: Python 3.11+, plus `appimageupdatetool` for AppImages that
-  do not have a GitHub release source
+  do not have a GitHub release source (Linux)
 
 ## Tests
 
@@ -39,3 +40,6 @@ bash -n audiofetch/audiofetch
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+AI disclosure: AI assisted with the coding; the ideas and project direction are
+the author's original work.

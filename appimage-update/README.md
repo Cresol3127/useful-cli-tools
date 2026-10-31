@@ -3,12 +3,11 @@
 Check or update all AppImages in `~/Desktop` and `~/Applications` with one
 command.
 
-`appimage-update` handles three kinds of AppImages:
+`appimage-update` handles two kinds of AppImages:
 
 1. Apps tracked by a GitHub release in its manifest — useful for portable apps
    that have no embedded update information.
 2. Apps with embedded AppImageUpdate information — via `appimageupdatetool`.
-3. On nixbook, the six Artcraft apps via their pinned official updater.
 
 ## Requirements
 
@@ -34,10 +33,6 @@ or point the script at an existing binary:
 ```sh
 export APPIMAGE_UPDATE_TOOL=/path/to/appimageupdatetool
 ```
-
-On nixbook, the script can build `appimageupdate` from the flake automatically
-when `APPIMAGE_UPDATE_NIXOS_ROOT` points at the checkout, or when it is running
-from `/etc/nixos/pkgs/appimages/`.
 
 ## Usage
 
@@ -118,16 +113,6 @@ never overwritten silently.
 
 Only `github.com` repositories are supported. The tool uses `gh auth token`
 when available, then `GITHUB_TOKEN`, then anonymous GitHub API requests.
-
-## nixbook integration
-
-When the script is run from the nixbook configuration, it uses:
-
-- `pkgs/artcraft/sources.json` and `pkgs/artcraft/update.py` for Artcraft apps
-- `prepare-source.py` plus `nix build .#appimageupdate` for the fallback tool
-
-Set `APPIMAGE_UPDATE_NIXOS_ROOT=/etc/nixos` to enable that integration from a
-standalone checkout. The Artcraft and Nix fallbacks are skipped otherwise.
 
 ## Tests
 

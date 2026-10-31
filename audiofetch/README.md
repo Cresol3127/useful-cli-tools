@@ -14,12 +14,6 @@ saving a predictable `Artist - Title (Album).ext` filename.
 - `ffmpeg` and `ffprobe`
 - [`fzf`](https://github.com/junegunn/fzf) for interactive search
 
-On NixOS:
-
-```nix
-environment.systemPackages = with pkgs; [ ffmpeg fzf yt-dlp ];
-```
-
 ## Install
 
 ```sh

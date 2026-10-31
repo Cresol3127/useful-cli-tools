@@ -1,0 +1,542 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+R=$'\033[0;31m'; G=$'\033[0;32m'; Y=$'\033[1;33m'; B=$'\033[0;34m'; C=$'\033[0;36m'; NC=$'\033[0m'
+
+lines=0
+erase() {
+    local n=$lines
+    [[ $n -le 0 ]] && return 0
+    printf '\033[%dA\r' "$n"
+    for ((i = 0; i < n; i++)); do printf '\033[2K\n'; done
+    printf '\033[%dA\r' "$n"
+    lines=0
+}
+sec() {
+    echo -e "$1"
+    lines=$((lines + 1))
+}
+
+usage() {
+    cat <<EOF
+audiofetch — Download audio or rewrite song metadata
+
+Usage: audiofetch [options] <url>
+       audiofetch [options]            Interactive YouTube search (fzf), then download
+       audiofetch --tag [options] <file> [file ...]
+
+Download mode:
+  -h, --help             Show this help
+  -f, --format <ext>     Audio format (opus, m4a, mp3, flac, etc.) (default: opus)
+  -a, --album <name>     Override album name (e.g. "OST - Hollow Knight")
+  -o, --output <dir>     Output directory (default: ~/Music)
+  --no-edit              Skip metadata edit prompt
+  --no-download          Only show metadata (no download)
+
+Tag mode (rewrite a single file's metadata):
+  --tag                 Interactively edit one or more files' Artist/Title/Album
+  --dry-run             Show what would be done (no changes)
+  --no-album            Skip album metadata
+
+Dependencies: yt-dlp, ffmpeg, ffprobe, fzf (search mode)
+EOF
+    exit 0
+}
+
+# Search mode
+search_video() {
+    command -v fzf &>/dev/null || { echo -e "${R}Error: fzf is not installed${NC}"; exit 1; }
+
+    sec "${B}── Search YouTube ──${NC}"
+    read -e -r -p "Query: " q || true
+    lines=$((lines + 1))
+    [[ -z "$q" ]] && { echo -e "${Y}No query given.${NC}"; exit 0; }
+    read -e -r -p "Max results [10]: " max || true
+    lines=$((lines + 1))
+    max="${max:-10}"
+    [[ "$max" =~ ^[0-9]+$ ]] || max=10
+
+    sec "${C}Searching...${NC}"
+    local results
+    results=$(yt-dlp --extractor-args "youtube:player_client=mweb" \
+        --flat-playlist \
+        --print $'%(id)s\t%(title)s\t%(channel)s\t%(duration_string)s\t%(view_count)s' \
+        --no-warnings "ytsearch$max:$q" 2>/dev/null \
+        | awk -F'\t' -v OFS='\t' '
+            function fmt(n) {
+                if (n >= 1000000000) s = sprintf("%.1f", n / 1000000000) "B"
+                else if (n >= 1000000) s = sprintf("%.1f", n / 1000000) "M"
+                else if (n >= 1000) s = sprintf("%.1f", n / 1000) "K"
+                else return n
+                if (s ~ /\.0[BMK]$/) sub(/\.0/, "", s)
+                return s
+            }
+            { $5 = fmt($5); print }
+        ' || true)
+
+    if [[ -z "$results" ]]; then
+        erase
+        echo -e "${R}No results for: $q${NC}"
+        exit 1
+    fi
+
+    local preview
+    preview='title=$(cut -f2 <<< "{}"); channel=$(cut -f3 <<< "{}"); dur=$(cut -f4 <<< "{}"); views=$(cut -f5 <<< "{}"); [ -z "$views" ] && views="N/A"; printf "Title:   %s\nChannel: %s\nLength:  %s\nViews:   %s\n" "$title" "$channel" "$dur" "$views"'
+
+    local picked
+    picked=$(printf '%s\n' "$results" | fzf --height 45% --layout=reverse \
+        --delimiter='\t' --with-nth=2.. --info=inline --prompt='Pick > ' \
+        --preview-window=down:40%:wrap --preview "$preview")
+
+    erase
+    [[ -z "$picked" ]] && { echo -e "${Y}Cancelled.${NC}"; exit 0; }
+
+    local id
+    id=$(cut -f1 <<< "$picked")
+    url="https://www.youtube.com/watch?v=$id"
+    sec "${G}Selected:${NC} $(cut -f2 <<< "$picked")"
+    return 0
+}
+
+# Options
+tag=false
+no_edit=false
+no_dl=false
+dry=false
+no_alb=false
+alb_override=""
+fmt="opus"
+out_dir="$HOME/Music"
+url=""
+pos_files=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage ;;
+        --tag) tag=true; shift ;;
+        -f|--format) fmt="$2"; shift 2 ;;
+        -a|--album) alb_override="$2"; shift 2 ;;
+        -o|--output) out_dir="$2"; shift 2 ;;
+        --no-edit) no_edit=true; shift ;;
+        --no-download) no_dl=true; shift ;;
+        --dry-run) dry=true; shift ;;
+        --no-album) no_alb=true; shift ;;
+        -*) echo -e "${R}Unknown option: $1${NC}"; usage ;;
+        *) pos_files+=("$1"); shift ;;
+    esac
+done
+
+if [[ "$tag" == false && "${#pos_files[@]}" -gt 0 ]]; then
+    url="${pos_files[0]}"
+fi
+
+if [[ "$tag" == false && -z "$url" ]]; then
+    search_video
+fi
+
+command -v ffmpeg &>/dev/null || { echo -e "${R}Error: ffmpeg is not installed${NC}"; exit 1; }
+
+if [[ "$tag" == false ]]; then
+    command -v yt-dlp &>/dev/null || { echo -e "${R}Error: yt-dlp is not installed${NC}"; exit 1; }
+fi
+
+# Shared helpers
+clean_title() {
+    local s="$1"
+    s="${s% (Official Lyric Video)}"
+    s="${s% (Official Music Video)}"
+    s="${s% (Official Video)}"
+    s="${s% (Official Audio)}"
+    s="${s% (Lyric Video)}"
+    s="${s% (Audio)}"
+    s="${s% (Visualizer)}"
+    s="${s% (Live)}"
+    s="${s% (Live Performance)}"
+    s="${s% [Official Lyric Video]}"
+    s="${s% [Official Music Video]}"
+    s="${s% [Official Video]}"
+    s="${s% [Official Audio]}"
+    s="${s% [Lyric Video]}"
+    s="${s% [Audio]}"
+    s="${s% [Visualizer]}"
+    s="${s% [Live]}"
+    s="${s% | Lyrics}"
+    s="${s% | Official Video}"
+    s="${s% | Official Music Video}"
+    s="${s% | Official Lyric Video}"
+    s="${s% | Lyric Video}"
+    s="${s% | Audio}"
+    s="${s% | Visualizer}"
+    s="${s% | Live}"
+    s="${s% (Cat Vibing Meme)}"
+    s="${s% - Remastered}"
+    s="${s% - Radio Edit}"
+    s="${s% (Remastered)}"
+    s="${s% (Radio Edit)}"
+    s="${s% [Remastered]}"
+    s="${s% [Radio Edit]}"
+    s="${s% (Full Song)}"
+    s="${s% [Full Song]}"
+    s="${s% (Full Video)}"
+    s="${s% [Full Video]}"
+    s="${s% (Lyrics)}"
+    s="${s% [Lyrics]}"
+    s="${s% - Lyrics}"
+    # Robust: repeatedly strip trailing bracketed/parenthesized junk tags, case-insensitive
+    while :; do
+        local old="$s"
+        s="$(sed -E 's/[[:space:]]*(\[[^]]*(official|music|lyric|audio|visualizer|live|video|lyrics|remaster|hd|4k)[^]]*\]|\([^)]*(official|music|lyric|audio|visualizer|live|video|lyrics|remaster|hd|4k)[^)]*\))[[:space:]]*$//I' <<< "$s")"
+        [[ "$s" == "$old" ]] && break
+    done
+    echo "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# Collapse runs of whitespace and trim ends
+ns() {
+    echo "$1" | sed 's/  */ /g; s/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+# Strip leading junk (bracketed/parenthesized tags, music symbols, separators)
+strip_prefix() {
+    local s="$1" old
+    while :; do
+        old="$s"
+        s="$(sed -E '
+            s/^[[:space:]–—‒:♪♫-]+//
+            s/^(\[[^]]*\]|\([^)]*\))[[:space:]–—‒:♪♫-]*//
+        ' <<< "$s")"
+        [[ "$s" == "$old" ]] && break
+    done
+    echo "$s"
+}
+
+# Clean an uploader/channel name used as an artist fallback
+clean_uploader() {
+    local s="$1"
+    s="${s% - Topic}"
+    s="${s% VEVO}"
+    s="${s% (Official)}"
+    s="${s% [Official]}"
+    s="${s% Official}"
+    s="${s% Music}"
+    ns "$s"
+}
+
+sanitize_filename() {
+    echo "$1" | sed 's/[/:*?"<>|]//g; s/  */ /g; s/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# Tag mode: interactively rewrite one or more files' metadata
+if [[ "$tag" == true ]]; then
+    command -v ffprobe &>/dev/null || { echo -e "${R}Error: ffprobe is not installed${NC}"; exit 1; }
+    command -v ffmpeg &>/dev/null || { echo -e "${R}Error: ffmpeg is not installed${NC}"; exit 1; }
+
+    if [[ "${#pos_files[@]}" -eq 0 ]]; then
+        echo -e "${R}Error: no file given. Usage: audiofetch --tag <file.opus>${NC}"
+        exit 1
+    fi
+
+    edited_count=0
+    for file in "${pos_files[@]}"; do
+        if [[ ! -f "$file" ]]; then
+            echo -e "  ${R}Error:${NC} not a file: $file"
+            continue
+        fi
+
+        ext="${file##*.}"
+        name=$(basename "$file" ."$ext")
+
+        artist=$(ffprobe -v quiet -show_entries stream_tags=artist -of default=noprint_wrappers=1:nokey=1 "$file" 2>/dev/null || true)
+        title=$(ffprobe -v quiet -show_entries stream_tags=title -of default=noprint_wrappers=1:nokey=1 "$file" 2>/dev/null || true)
+        album=$(ffprobe -v quiet -show_entries stream_tags=album -of default=noprint_wrappers=1:nokey=1 "$file" 2>/dev/null || true)
+
+        echo ""
+        echo -e "${B}── $(basename "$file") ──${NC}"
+        echo -e "  Current: ${G}${artist:-?}${NC} — ${C}${title:-?}${NC}${album:+ (${album})}"
+        echo -e "  ${C}Leave blank to keep, enter \".\" to clear.${NC}"
+
+        read -e -r -i "$artist" -p "Artist: " val || true
+        if [[ "$val" == "." ]]; then artist=""; else artist="${val:-$artist}"; fi
+        read -e -r -i "$title" -p "Title: " val || true
+        if [[ "$val" == "." ]]; then title=""; else title="${val:-$title}"; fi
+        read -e -r -i "$album" -p "Album: " val || true
+        if [[ "$val" == "." ]]; then album=""; else album="${val:-$album}"; fi
+
+        [[ "$no_alb" == true ]] && album=""
+
+        if [[ -z "$artist" ]] || [[ -z "$title" ]]; then
+            echo -e "  ${Y}Skip:${NC} artist and title are both required"
+            continue
+        fi
+
+        new_name="$(sanitize_filename "$artist - $title")${album:+ ($(sanitize_filename "$album"))}.$ext"
+        new_path="$(dirname "$file")/$new_name"
+
+        if [[ "$dry" == true ]]; then
+            echo -e "  ${G}Would tag:${NC} $artist — $title${album:+ ($album)}"
+            [[ "$file" != "$new_path" ]] && echo -e "  ${C}Would rename:${NC} $name.$ext  ->  $new_name"
+            edited_count=$((edited_count + 1))
+            continue
+        fi
+
+        targs=()
+        targs+=(-metadata:s:a title="$title")
+        targs+=(-metadata:s:a artist="$artist")
+        [[ -n "$album" ]] && targs+=(-metadata:s:a album="$album")
+        targs+=(-metadata:s:a encoder="audiofetch")
+        temp=$(mktemp "$(dirname "$file")/.af-tag-XXXXXX.$ext")
+        if ffmpeg -i "$file" -map 0 -c copy "${targs[@]}" -y "$temp" 2>/dev/null; then
+            mv "$temp" "$file"
+            if [[ "$file" != "$new_path" ]]; then
+                mv "$file" "$new_path"
+                echo -e "  ${G}Tagged:${NC} $artist — $title${album:+ ($album)}"
+                echo -e "  ${C}Renamed:${NC} $new_name"
+            else
+                echo -e "  ${G}Tagged:${NC} $artist — $title${album:+ ($album)}"
+            fi
+            edited_count=$((edited_count + 1))
+        else
+            rm -f "$temp"
+            echo -e "  ${R}Error:${NC} ffmpeg failed on $name.$ext"
+        fi
+    done
+
+    echo ""
+    echo -e "${G}Done${NC} — $edited_count file(s) tagged."
+    exit 0
+fi
+
+# Download mode
+erase
+sec ""
+sec "${B}── Fetching video info... ──${NC}"
+
+IFS=$'\n' read -r title uploader track meta_artist album < <(
+    yt-dlp --extractor-args "youtube:player_client=mweb" \
+           --print "%(title)s" --print "%(uploader)s" \
+           --print "%(track)s" --print "%(artist)s" \
+           --print "%(album)s" "$url" 2>/dev/null
+) || true
+title="${title//$'\n'/ }"; title="${title//$'\r'/ }"
+uploader="${uploader//$'\n'/ }"; uploader="${uploader//$'\r'/ }"
+track="${track//$'\n'/ }"; track="${track//$'\r'/ }"
+meta_artist="${meta_artist//$'\n'/ }"; meta_artist="${meta_artist//$'\r'/ }"
+album="${album//$'\n'/ }"; album="${album//$'\r'/ }"
+[[ -n "$alb_override" ]] && album="$alb_override"
+if [[ -z "$title" && -z "$uploader" ]]; then
+    erase
+    sec ""
+    sec "${R}Error: could not fetch video info${NC}"
+    exit 1
+fi
+sec "${C}Title:${NC}    $title"
+sec "${C}Uploader:${NC} $uploader"
+
+artist=""
+song=""
+
+[[ -n "$track" && "$track" != "NA" ]] && song="$track"
+[[ -n "$meta_artist" && "$meta_artist" != "NA" ]] && artist="$meta_artist"
+
+if [[ -z "$song" || -z "$artist" ]]; then
+    pt="$(ns "$(strip_prefix "$title")")"
+    sep=""
+    sep_idx=-1
+    # dash variants: "Artist - Song" (space-dash-space)
+    for d in "-" "–" "—" "‒"; do
+        rest="${pt#*" $d "}"
+        if [[ "$rest" != "$pt" ]]; then
+            idx=$(( ${#pt} - ${#rest} - ${#d} - 2 ))
+            if [[ $sep_idx -eq -1 || $idx -lt $sep_idx ]]; then
+                sep="$d"; sep_idx=$idx
+            fi
+        fi
+    done
+    # colon variant: "Artist: Song" (colon + space, no leading space)
+    crest="${pt#*": "}"
+    if [[ "$crest" != "$pt" ]]; then
+        cidx=$(( ${#pt} - ${#crest} - 2 ))
+        if [[ $sep_idx -eq -1 || $cidx -lt $sep_idx ]]; then
+            sep=":"; sep_idx=$cidx
+        fi
+    fi
+    if [[ -n "$sep" ]]; then
+        if [[ "$sep" == ":" ]]; then
+            [[ -z "$artist" ]] && artist="${pt%%: *}"
+            [[ -z "$song" ]] && song="${pt#*: }"
+        else
+            [[ -z "$artist" ]] && artist="${pt%% $sep *}"
+            [[ -z "$song" ]] && song="${pt#* $sep }"
+        fi
+    else
+        [[ -z "$artist" ]] && artist="$(clean_uploader "$uploader")"
+        [[ -z "$song" ]] && song="$pt"
+    fi
+fi
+
+song=$(clean_title "$song")
+artist="${artist% - Topic}"
+artist=$(ns "$artist")
+song="${song//$'\n'/ }"; song="${song//$'\r'/ }"
+artist="${artist//$'\n'/ }"; artist="${artist//$'\r'/ }"
+artist=$(ns "$artist")
+
+erase
+sec ""
+sec "${B}── Detected Metadata ──${NC}"
+sec "${G}Artist:${NC}  $artist"
+sec "${G}Title:${NC}   $song"
+if [[ -n "$album" && "$album" != "NA" ]]; then
+    sec "${G}Album:${NC}   $album"
+else
+    album=""
+fi
+
+edited=false
+if [[ "$no_edit" == false ]]; then
+    sec ""
+    read -r -p "$(echo -e "${Y}Edit metadata? [y/N]${NC} ")" ans || true
+    lines=$((lines + 1))
+    if [[ "$ans" =~ ^[Yy] ]]; then
+        edited=true
+        sec ""
+        read -e -r -i "$artist" -p "Artist: " val || true
+        artist="${val:-$artist}"
+        read -e -r -i "$song" -p "Title: " val || true
+        song="${val:-$song}"
+        read -e -r -i "$album" -p "Album: " val || true
+        if [[ -n "$val" ]]; then
+            album="$val"
+        else
+            album=""
+        fi
+        lines=$((lines + 3))
+        artist="${artist//$'\n'/ }"; artist="${artist//$'\r'/ }"
+        song="${song//$'\n'/ }"; song="${song//$'\r'/ }"
+        album="${album//$'\n'/ }"; album="${album//$'\r'/ }"
+    fi
+fi
+
+if [[ "$edited" == true ]]; then
+    erase
+    sec ""
+    sec "${B}── Final Metadata ──${NC}"
+    sec "${G}Artist:${NC}  $artist"
+    sec "${G}Title:${NC}   $song"
+    [[ -n "$album" ]] && sec "${G}Album:${NC}   $album"
+fi
+
+if [[ "$no_dl" == true ]]; then
+    erase
+    sec ""
+    sec "${Y}Metadata only. Not downloading.${NC}"
+    exit 0
+fi
+
+erase
+sec ""
+tmp=$(mktemp -d "/tmp/audiofetch-XXXXXX")
+trap "rm -rf '$tmp'" EXIT INT TERM
+
+cols=$(tput cols 2>/dev/null || echo 80)
+nrows=4
+rows=("${B}── Downloading audio...${NC}" "" "" "")
+for r in "${rows[@]}"; do printf '\r\033[2K%s\n' "$r"; done
+printf '\r'
+lines=$((lines + 4))
+set_row() {
+    local slot=$1 out="$2"
+    if (( ${#out} > cols - 3 )); then
+        out="${out:0:$((cols - 3))}..."
+    fi
+    [[ "${rows[$slot]}" == "$out" ]] && return 0
+    rows[$slot]="$out"
+    local off=$((nrows - slot))
+    printf '\033[%dA' "$off"
+    printf '\r\033[2K'
+    printf '%s' "$out"
+    printf '\033[%dB' "$off"
+    printf '\r'
+}
+render() {
+    local line="$1" pct
+    [[ -z "$line" ]] && return 0
+    case "$line" in
+        '[youtube]'*|'[info]'*) return 0 ;;
+        '[download] Destination:'*)
+            set_row 2 "${line#*Destination: }"
+            ;;
+        '[download] Sleeping'*|'WARNING:'*)
+            set_row 3 "$line"
+            ;;
+        '[download] '*)
+            pct="${line%%%*}"
+            pct="${pct##* }"
+            [[ "$pct" =~ ^[0-9.]+$ ]] || return 0
+            set_row 0 "${B}── Downloading audio... ${C}${pct}%${NC}"
+            set_row 1 "$line"
+            ;;
+        '[ExtractAudio]'*|'[Merger]'*|'[VideoConvertor]'*|'[VideoRemuxer]'*|'Deleting original file'*)
+            set_row 3 "$line"
+            ;;
+    esac
+    return 0
+}
+
+mkfifo "$tmp/out.fifo"
+(
+    while IFS= read -r line; do
+        render "$line"
+    done
+) < "$tmp/out.fifo" &
+reader=$!
+
+yt-dlp --extractor-args "youtube:player_client=mweb" \
+    --newline --progress \
+    -x --audio-format "$fmt" --audio-quality 0 \
+    -o "$tmp/%(title)s.%(ext)s" \
+    "$url" > "$tmp/out.fifo" 2>&1 &
+dl=$!
+
+wait "$dl" || dl_status=$?
+wait "$reader" 2>/dev/null || true
+rm -f "$tmp/out.fifo"
+
+erase
+
+if [[ ${dl_status:-0} -ne 0 ]]; then
+    sec ""
+    sec "${R}Error: download failed${NC}"
+    exit 1
+fi
+
+dl_file=$(find "$tmp" -maxdepth 1 -name "*.$fmt" -type f | head -1)
+if [[ -z "$dl_file" ]]; then
+    sec ""
+    sec "${R}Error: Downloaded file not found${NC}"
+    exit 1
+fi
+
+sec ""
+
+base="$(sanitize_filename "$artist - $song")"
+if [[ -n "$album" ]]; then
+    out_file="$out_dir/${base} ($(sanitize_filename "$album")).$fmt"
+else
+    out_file="$out_dir/$base.$fmt"
+fi
+
+mkdir -p "$out_dir"
+
+args=()
+args+=(-metadata:s:a title="$song")
+args+=(-metadata:s:a artist="$artist")
+[[ -n "$album" ]] && args+=(-metadata:s:a album="$album")
+args+=(-metadata:s:a encoder="audiofetch")
+
+ffmpeg -i "$dl_file" \
+    "${args[@]}" \
+    -c copy \
+    -y "$out_file" 2>/dev/null
+
+sec "${G}Saved:${NC} $out_file"

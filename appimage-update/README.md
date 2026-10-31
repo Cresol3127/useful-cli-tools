@@ -122,6 +122,12 @@ never overwritten silently.
 Only `github.com` repositories are supported. The tool uses `gh auth token`
 when available, then `GITHUB_TOKEN`, then anonymous GitHub API requests.
 
+## Acknowledgements
+
+The GitHub-release tracking idea was inspired by
+[`Obtainium`](https://github.com/ImranR98/Obtainium), which helps Android users
+install and update apps directly from their upstream release sources.
+
 ## Tests
 
 ```sh

@@ -2,12 +2,15 @@
 """Check or update all AppImages in ~/Desktop and ~/Applications."""
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -19,6 +22,9 @@ import urllib.request
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 VERSION = re.compile(r"\d+(?:\.\d+){1,3}")
+COMMAND_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*\Z")
+DESKTOP_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.desktop\Z")
+MIME_TYPE = re.compile(r"[A-Za-z0-9.+_-]+/[A-Za-z0-9.+_-]+\Z")
 ARCH_PATTERNS = {
     "x86_64": re.compile(r"(?:x86[_-]64|amd64|x64)", re.IGNORECASE),
     "aarch64": re.compile(r"(?:aarch64|arm64)", re.IGNORECASE),
@@ -151,6 +157,152 @@ def manifest_file():
     return base / "appimage-update/sources.json"
 
 
+def desktop_directory():
+    override = os.environ.get("APPIMAGE_UPDATE_DESKTOP_DIR")
+    if override:
+        return Path(override).expanduser()
+    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")).expanduser()
+    return base / "applications"
+
+
+def command_directory():
+    return Path(os.environ.get("APPIMAGE_UPDATE_BIN_DIR", Path.home() / ".local/bin")).expanduser()
+
+
+def validate_command(name):
+    if not isinstance(name, str) or not COMMAND_NAME.fullmatch(name) or name in (".", ".."):
+        raise ValueError(f"invalid command name: {name!r}")
+    return name
+
+
+def validate_desktop_id(name):
+    if not isinstance(name, str) or not DESKTOP_ID.fullmatch(name) or name in ("..desktop",):
+        raise ValueError(f"invalid desktop entry ID: {name!r}")
+    return name
+
+
+def validate_mime_type(value):
+    if not isinstance(value, str) or not MIME_TYPE.fullmatch(value):
+        raise ValueError(f"invalid MIME type: {value!r}")
+    return value
+
+
+def default_desktop_name(filename):
+    stem = Path(filename).stem
+    match = VERSION.search(stem)
+    if match:
+        stem = stem[:match.start()]
+        stem = re.sub(r"[-_.]v?$", "", stem, flags=re.IGNORECASE)
+    else:
+        stem = re.sub(
+            r"(?:[-_.](?:linux[-_.]?)?(?:x86[_-]64|amd64|x64|aarch64|arm64|armv[67]l?|armhf|i[3-6]86))+$",
+            "",
+            stem,
+            flags=re.IGNORECASE,
+        )
+    stem = re.sub(r"[-_]+", " ", stem).strip()
+    return stem or Path(filename).stem
+
+
+def desktop_id_for(name):
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip().lower()).strip(".-")
+    if not slug or slug in (".", ".."):
+        raise ValueError("desktop name cannot be converted to a safe desktop ID")
+    return validate_desktop_id(f"{slug}.desktop")
+
+
+def integration_source_id(entry):
+    identity = f"{entry['repo']}\0{entry.get('asset', '')}"
+    return hashlib.sha256(identity.encode()).hexdigest()[:16]
+
+
+def desktop_value(value):
+    if not isinstance(value, str) or any(char in value for char in "\0\r\n"):
+        raise ValueError("desktop entry values cannot contain newlines or NUL")
+    return value.replace("\\", "\\\\").replace("\t", "\\t")
+
+
+def desktop_exec_arg(value):
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`") + '"'
+
+
+def write_managed_file(path, content, mode, marker):
+    if path.is_symlink():
+        raise ValueError(f"refusing to replace a symlink: {path}")
+    if path.exists():
+        if not path.is_file():
+            raise ValueError(f"not a regular file: {path}")
+        try:
+            old = path.read_text(errors="replace")
+        except OSError as error:
+            raise ValueError(f"cannot read existing integration {path}: {error}") from error
+        if marker not in old:
+            raise ValueError(f"refusing to overwrite unmanaged file: {path}")
+
+    path.parent.mkdir(parents=True, mode=0o755, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def install_integrations(entry):
+    commands = [validate_command(command) for command in entry.get("commands", [])]
+    if not commands and not entry.get("desktop"):
+        return
+
+    image = Path(entry["path"])
+    if image.is_symlink() or not image.is_file():
+        raise ValueError(f"not a regular AppImage file: {image}")
+    source_id = integration_source_id(entry)
+
+    command_paths = {}
+    for command in commands:
+        marker = f"# appimage-update-source: {source_id}"
+        path = command_directory() / command
+        content = (
+            "#!/usr/bin/env sh\n"
+            f"{marker}\n"
+            f"exec {shlex.quote(str(image))} \"$@\"\n"
+        )
+        write_managed_file(path, content, 0o755, marker)
+        command_paths[command] = path
+        print(f"Command wrapper: {path}", flush=True)
+
+    if not entry.get("desktop"):
+        return
+
+    name = desktop_value(entry.get("desktop_name") or default_desktop_name(image.name))
+    desktop_id = validate_desktop_id(entry.get("desktop_id") or desktop_id_for(name))
+    icon = desktop_value(entry.get("icon") or "application-x-executable")
+    mime_types = [validate_mime_type(value) for value in entry.get("mime_types", [])]
+    launcher = command_paths[commands[0]] if commands else image
+    marker = f"X-AppImage-Update-Source={source_id}"
+    lines = [
+        "[Desktop Entry]",
+        "Version=1.0",
+        "Type=Application",
+        f"Name={name}",
+        f"Exec={desktop_exec_arg(str(launcher))} %U",
+        f"Icon={icon}",
+        "Terminal=false",
+        "StartupNotify=true",
+        marker,
+    ]
+    if mime_types:
+        lines.append(f"MimeType={';'.join(mime_types)};")
+    lines.append("")
+    path = desktop_directory() / desktop_id
+    write_managed_file(path, "\n".join(lines), 0o644, marker)
+    print(f"Desktop entry: {path}", flush=True)
+
+
 def load_manifest():
     path = manifest_file()
     if not path.exists():
@@ -179,6 +331,33 @@ def load_manifest():
             if not isinstance(item["version"], str):
                 raise ValueError(f"invalid version in manifest: {path}")
             entry["version"] = item["version"]
+        desktop = item.get("desktop", False)
+        if not isinstance(desktop, bool):
+            raise ValueError(f"invalid desktop integration flag in manifest: {path}")
+        if desktop:
+            entry["desktop"] = True
+        if item.get("desktop_name") is not None:
+            entry["desktop_name"] = desktop_value(item["desktop_name"])
+        if item.get("desktop_id") is not None:
+            entry["desktop_id"] = validate_desktop_id(item["desktop_id"])
+        if item.get("icon") is not None:
+            entry["icon"] = desktop_value(item["icon"])
+        commands = item.get("commands", [])
+        if not isinstance(commands, list):
+            raise ValueError(f"invalid commands in manifest: {path}")
+        if commands:
+            validated = [validate_command(command) for command in commands]
+            if len(set(validated)) != len(validated):
+                raise ValueError(f"duplicate commands in manifest: {path}")
+            entry["commands"] = validated
+        mime_types = item.get("mime_types", [])
+        if not isinstance(mime_types, list):
+            raise ValueError(f"invalid MIME types in manifest: {path}")
+        if mime_types:
+            validated = [validate_mime_type(value) for value in mime_types]
+            if len(set(validated)) != len(validated):
+                raise ValueError(f"duplicate MIME types in manifest: {path}")
+            entry["mime_types"] = validated
         sources[str(source)] = entry
     return sources
 
@@ -300,9 +479,27 @@ def download_asset(url, destination, expected=None):
     temporary = Path(temporary)
     try:
         with os.fdopen(descriptor, "wb") as output, urllib.request.urlopen(url, timeout=60) as response:
+            headers = getattr(response, "headers", None)
+            content_length = headers.get("Content-Length") if headers else None
+            try:
+                total = int(content_length) if content_length else 0
+            except (TypeError, ValueError):
+                total = 0
+            downloaded = 0
             while chunk := response.read(1024 * 1024):
                 digest.update(chunk)
                 output.write(chunk)
+                downloaded += len(chunk)
+                if total:
+                    width = 24
+                    filled = min(width, int(width * downloaded / total))
+                    progress = f"[{('=' * filled).ljust(width)}] {min(100, downloaded * 100 // total):3d}%"
+                    progress += f" ({downloaded / 1024**2:.1f}/{total / 1024**2:.1f} MiB)"
+                else:
+                    progress = f"{downloaded / 1024**2:.1f} MiB"
+                print(f"\rDownloading {destination.name}: {progress}", end="", file=sys.stderr, flush=True)
+            if downloaded:
+                print(file=sys.stderr, flush=True)
             output.flush()
             os.fsync(output.fileno())
         if expected and digest.hexdigest() != expected:
@@ -336,7 +533,11 @@ def update_tracked(entry, apply=False, prune=False):
     if current:
         if entry.get("version") != tag:
             entry["version"] = tag
+            if apply:
+                install_integrations(entry)
             return True
+        if apply:
+            install_integrations(entry)
         return False
     if not apply:
         print("  Use --update to download it.", flush=True)
@@ -352,6 +553,7 @@ def update_tracked(entry, apply=False, prune=False):
 
     entry["path"] = str(target)
     entry["version"] = tag
+    install_integrations(entry)
     print(f"  Updated: {target}", flush=True)
     if prune and target != image:
         try:
@@ -369,7 +571,11 @@ def update_tracked(entry, apply=False, prune=False):
     return True
 
 
-def add_source(path, repo, asset_pattern, apply, prune, sources, arch=None):
+def add_source(
+    path, repo, asset_pattern, apply, prune, sources, arch=None,
+    desktop=False, desktop_name=None, desktop_id=None, icon=None,
+    commands=None, mime_types=None,
+):
     repo = normalize_repo(repo)
     image = existing_image(path) if path is not None else None
     release = github_release(repo)
@@ -410,12 +616,36 @@ def add_source(path, repo, asset_pattern, apply, prune, sources, arch=None):
     if not current:
         current = bool(expected) and sha256(image) == expected
     canonical = release.get("full_name")
+    previous = sources.get(str(image), {})
     entry = {
         "path": str(image),
         "repo": canonical if isinstance(canonical, str) and REPO.fullmatch(canonical) else repo,
         "asset": pattern,
         "version": tag if current else None,
     }
+    if desktop or previous.get("desktop"):
+        entry["desktop"] = True
+        entry["desktop_name"] = desktop_value(
+            desktop_name or previous.get("desktop_name") or default_desktop_name(asset["name"])
+        )
+        entry["desktop_id"] = validate_desktop_id(
+            desktop_id or previous.get("desktop_id") or desktop_id_for(entry["desktop_name"])
+        )
+        icon_value = icon if icon is not None else previous.get("icon")
+        if icon_value:
+            entry["icon"] = desktop_value(icon_value)
+    commands = list(dict.fromkeys([
+        *previous.get("commands", []),
+        *(commands or []),
+    ]))
+    if commands:
+        entry["commands"] = [validate_command(command) for command in commands]
+    mime_types = list(dict.fromkeys([
+        *previous.get("mime_types", []),
+        *(mime_types or []),
+    ]))
+    if mime_types:
+        entry["mime_types"] = [validate_mime_type(value) for value in mime_types]
     sources[str(image)] = entry
     save_manifest(sources)
     print(f"Tracking {image.name} from {entry['repo']}; latest release {tag}.", flush=True)
@@ -425,6 +655,7 @@ def add_source(path, repo, asset_pattern, apply, prune, sources, arch=None):
         print("  Local file is not verified as current; run --update to download it.", flush=True)
     if apply and not current and update_tracked(entry, apply=True, prune=prune):
         save_manifest(sources)
+    install_integrations(entry)
 
 
 def remove_source(path, sources):
@@ -461,35 +692,77 @@ def run(images, apply=False, prune=False):
     handled = set()
     tool = None
     failures = 0
+    updates_available = 0
+    interactive_check = not apply and sys.stdout.isatty()
     for image in images:
         if image in handled:
             continue
         handled.add(image)
-        print(f"\n{'Updating' if apply else 'Checking'} {image.name}", flush=True)
+        output = io.StringIO()
+        errors = io.StringIO()
         try:
-            if str(image) in tracked:
-                manifest_changed |= update_tracked(tracked[str(image)], apply=apply, prune=prune)
-            else:
-                if tool is None:
-                    tool = generic_tool()
-                flags = (["--remove-old"] if prune else []) if apply else ["--check-for-update"]
-                result = subprocess.run([tool, *flags, str(image)], cwd=image.parent)
-                if not apply and result.returncode == 1:
-                    print("  Update available.")
-                elif result.returncode != 0:
-                    raise ValueError(
-                        f"AppImageUpdate exited {result.returncode}. This app may lack embedded "
-                        "update information; track its GitHub release with "
-                        f"--add OWNER/REPO [--asset REGEX] {image}"
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                if str(image) in tracked:
+                    manifest_changed |= update_tracked(tracked[str(image)], apply=apply, prune=prune)
+                else:
+                    if tool is None:
+                        tool = generic_tool()
+                    flags = (["--remove-old"] if prune else []) if apply else ["--check-for-update"]
+                    result = subprocess.run(
+                        [tool, *flags, str(image)], cwd=image.parent,
+                        capture_output=not apply, text=not apply,
                     )
-                elif not apply:
-                    print("  Already current.")
+                    if not apply and result.returncode == 1:
+                        output.write("Update available.\n")
+                    elif result.returncode != 0:
+                        detail = "\n".join(filter(None, (
+                            getattr(result, "stdout", ""), getattr(result, "stderr", ""),
+                        ))).strip()
+                        raise ValueError(
+                            f"AppImageUpdate exited {result.returncode}. This app may lack embedded "
+                            "update information; track its GitHub release with "
+                            f"--add OWNER/REPO [--asset REGEX] {image}"
+                            + (f"\n{detail}" if detail else "")
+                        )
+                    elif not apply:
+                        output.write("Already current.\n")
+            if apply:
+                print(f"Updating {image.name}")
+                if output.getvalue().strip():
+                    print(output.getvalue().rstrip())
+                if errors.getvalue().strip():
+                    print(errors.getvalue().rstrip(), file=sys.stderr)
+            else:
+                detail = output.getvalue()
+                match = re.search(r"latest ([^;]+); (current|update available)", detail)
+                if match:
+                    state = "Up to date" if match.group(2) == "current" else "Update available"
+                    state += f" (latest {match.group(1)})"
+                elif "Update available." in detail:
+                    state = "Update available"
+                else:
+                    state = "Up to date"
+                updates_available += state.startswith("Update available")
+                status = f"{image.name}: {state}"
+                if interactive_check:
+                    print(f"\r\033[K{status}", end="", flush=True)
+                else:
+                    print(status)
         except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
             failures += 1
-            print(f"  FAILED: {image.name}: {error}", file=sys.stderr, flush=True)
+            detail = "\n".join(part.strip() for part in (output.getvalue(), errors.getvalue()) if part.strip())
+            if interactive_check:
+                print(f"\r\033[K{image.name}: FAILED", flush=True)
+            print(f"{image.name}: FAILED: {error}" + (f"\n{detail}" if detail else ""), file=sys.stderr, flush=True)
     if manifest_changed:
         save_manifest(tracked)
-    print(f"\n{'Update' if apply else 'Check'} finished: {len(handled)} app(s), {failures} failure(s).")
+    if apply:
+        print(f"Update finished: {len(handled)} app(s), {failures} failure(s).")
+    else:
+        if interactive_check:
+            print()
+        print()
+        print(f"Check finished: {len(images)} file(s), {updates_available} update(s) available, {failures} failure(s).")
     return 1 if failures else 0
 
 
@@ -499,7 +772,8 @@ def main():
         usage="%(prog)s [options] [path ...]",
         description="Check or update AppImages.",
         formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=34, width=100),
-        epilog="Paths default to ~/Desktop and ~/Applications. Add by repo: --add OWNER/REPO or GitHub URL.",
+        epilog=("Paths default to ~/Desktop and ~/Applications. Add by repo: --add OWNER/REPO or "
+                "GitHub URL. --desktop and --command configure launch integrations for tracked apps."),
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("-c", "--check", action="store_true", help="check only (default)")
@@ -516,6 +790,18 @@ def main():
                         help="select the matching release asset for --add")
     parser.add_argument("--arch", metavar="ARCH",
                         help="select release asset for this architecture (default: host)")
+    parser.add_argument("--desktop", action="store_true",
+                        help="create a desktop entry for the tracked AppImage")
+    parser.add_argument("--name", "--desktop-name", dest="desktop_name", metavar="NAME",
+                        help="display name for --desktop (default: inferred from asset name)")
+    parser.add_argument("--desktop-id", metavar="ID.desktop",
+                        help="desktop entry filename (default: derived from its name)")
+    parser.add_argument("--icon", metavar="ICON",
+                        help="icon theme name for --desktop (default: application-x-executable)")
+    parser.add_argument("--mime-type", action="append", default=[], metavar="MIME",
+                        help="MIME type handled by --desktop; may be repeated")
+    parser.add_argument("--command", action="append", default=[], metavar="NAME",
+                        help="create a ~/.local/bin wrapper; may be repeated (tracked apps only)")
     parser.add_argument("paths", nargs="*", type=Path, metavar="PATH",
                         help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -523,13 +809,17 @@ def main():
         parser.error("--asset requires --add")
     if args.arch and not args.add:
         parser.error("--arch requires --add")
+    if (args.desktop or args.desktop_name or args.desktop_id or args.icon or args.mime_type or args.command) and not args.add:
+        parser.error("desktop and command options require --add")
+    if (args.desktop_name or args.desktop_id or args.icon or args.mime_type) and not args.desktop:
+        parser.error("--name, --desktop-id, --icon, and --mime-type require --desktop")
     if args.prune and not args.update:
         parser.error("--prune requires --update")
     if args.add and len(args.paths) > 1:
         parser.error("--add accepts at most one AppImage path")
     if args.remove and len(args.paths) != 1:
         parser.error("--remove requires exactly one AppImage path")
-    if args.remove and (args.check or args.update or args.prune):
+    if args.remove and (args.check or args.update or args.prune or args.desktop or args.command):
         parser.error("--remove cannot be combined with check/update")
     if args.remove:
         remove_source(args.paths[0], load_manifest())
@@ -538,6 +828,12 @@ def main():
         add_source(
             args.paths[0] if args.paths else None,
             args.add, args.asset, args.update, args.prune, load_manifest(), args.arch,
+            desktop=args.desktop,
+            desktop_name=args.desktop_name,
+            desktop_id=args.desktop_id,
+            icon=args.icon,
+            commands=args.command,
+            mime_types=args.mime_type,
         )
         return 0
     paths = args.paths or [
@@ -547,7 +843,6 @@ def main():
     if not images:
         print("No AppImages found in the selected directories (default: ~/Desktop and ~/Applications).")
         return 0
-    print(f"Found {len(images)} AppImage file(s).", flush=True)
     return run(images, apply=args.update, prune=args.prune)
 
 

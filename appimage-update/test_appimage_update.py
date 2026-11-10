@@ -56,6 +56,76 @@ class BatchUpdateTests(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
         self.assertEqual(run.call_args.args[0], ["updater", "--check-for-update", str(images[1])])
 
+    def test_check_prints_one_summary_and_hides_backend_output(self):
+        image = self.image("first.AppImage")
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), \
+             patch.object(update, "generic_tool", return_value="updater"), \
+             patch.object(update.subprocess, "run", return_value=subprocess.CompletedProcess(
+                 [], 1, stdout="Fetching release metadata\\n", stderr="zsync chatter\\n",
+             )) as run:
+            self.assertEqual(update.run([image]), 0)
+        self.assertEqual(stdout.getvalue().splitlines(), [
+            "first.AppImage: Update available",
+            "",
+            "Check finished: 1 file(s), 1 update(s) available, 0 failure(s).",
+        ])
+        self.assertTrue(run.call_args.kwargs["capture_output"])
+
+    def test_check_failure_preserves_backend_diagnostics(self):
+        image = self.image("broken.AppImage")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), \
+             patch.object(update, "generic_tool", return_value="updater"), \
+             patch.object(update.subprocess, "run", return_value=subprocess.CompletedProcess(
+                 [], 2, stdout="backend output", stderr="TLS certificate error",
+             )):
+            self.assertEqual(update.run([image]), 1)
+        self.assertIn("AppImageUpdate exited 2", stderr.getvalue())
+        self.assertIn("TLS certificate error", stderr.getvalue())
+
+    def test_download_shows_progress_and_verifies_digest(self):
+        image = self.directory / "download.AppImage"
+        body = b"download payload"
+
+        class Response(io.BytesIO):
+            headers = {"Content-Length": str(len(body))}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), \
+             patch.object(update.urllib.request, "urlopen", return_value=Response(body)):
+            update.download_asset("https://github.com/owner/repo/release/download", image,
+                                  hashlib.sha256(body).hexdigest())
+        self.assertEqual(image.read_bytes(), body)
+        self.assertIn("100%", stderr.getvalue())
+        self.assertIn("download.AppImage", stderr.getvalue())
+
+    def test_interactive_check_reuses_one_status_line(self):
+        images = [self.image("first.AppImage"), self.image("second.AppImage")]
+
+        class Terminal(io.StringIO):
+            def isatty(self):
+                return True
+
+        terminal = Terminal()
+        with contextlib.redirect_stdout(terminal), \
+             patch.object(update, "generic_tool", return_value="updater"), \
+             patch.object(update.subprocess, "run", side_effect=[
+                 subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 1),
+             ]):
+            self.assertEqual(update.run(images), 0)
+        text = terminal.getvalue()
+        self.assertIn("\r\033[Kfirst.AppImage: Up to date", text)
+        self.assertIn("\r\033[Ksecond.AppImage: Update available", text)
+        self.assertNotIn("\nfirst.AppImage:", text)
+        self.assertIn("Check finished: 2 file(s), 1 update(s) available", text)
+
     def test_failures_do_not_stop_remaining_apps(self):
         images = [self.image("broken.AppImage"), self.image("working.AppImage")]
         with patch.object(update, "generic_tool", return_value="updater"), \
@@ -106,6 +176,127 @@ class BatchUpdateTests(unittest.TestCase):
         update.remove_source(image, update.load_manifest())
         self.assertEqual(update.load_manifest(), {})
         self.assertTrue(image.exists())
+
+    def test_install_integrations_creates_desktop_entry_and_explicit_command(self):
+        image = self.image("Loaf-v0.3.0-x86_64.AppImage")
+        desktop_dir = self.directory / "data/applications"
+        command_dir = self.directory / "bin"
+        entry = {
+            "path": str(image),
+            "repo": "owner/loaf",
+            "asset": r"Loaf-v.*-x86_64\.AppImage",
+            "desktop": True,
+            "desktop_name": "Loaf",
+            "desktop_id": "loaf.desktop",
+            "icon": "system-file-manager",
+            "mime_types": ["inode/directory"],
+            "commands": ["loaf"],
+        }
+
+        with patch.object(update, "desktop_directory", return_value=desktop_dir), \
+             patch.object(update, "command_directory", return_value=command_dir):
+            update.install_integrations(entry)
+
+        desktop = (desktop_dir / "loaf.desktop").read_text()
+        command = command_dir / "loaf"
+        wrapper = command.read_text()
+        self.assertIn("Name=Loaf", desktop)
+        self.assertIn('Exec="' + str(command) + '" %U', desktop)
+        self.assertIn("MimeType=inode/directory;", desktop)
+        self.assertIn("X-AppImage-Update-Source=", desktop)
+        self.assertIn(str(image), wrapper)
+        self.assertTrue(command.stat().st_mode & 0o111)
+        self.assertEqual(update.default_desktop_name(image.name), "Loaf")
+
+    def test_update_refreshes_command_wrapper_for_new_versioned_filename(self):
+        old = self.image("Loaf-v1.0.0-x86_64.AppImage")
+        old.write_bytes(b"old release")
+        body = b"new release"
+        entry = {
+            "path": str(old),
+            "repo": "owner/loaf",
+            "asset": update.pattern_for(old.name),
+            "version": "v1.0.0",
+            "desktop": True,
+            "desktop_name": "Loaf",
+            "desktop_id": "loaf.desktop",
+            "icon": "system-file-manager",
+            "mime_types": ["inode/directory"],
+            "commands": ["loaf"],
+        }
+        desktop_dir = self.directory / "data/applications"
+        command_dir = self.directory / "bin"
+        release = self.release(body, tag="v2.0.0", name="Loaf-v2.0.0-x86_64.AppImage")
+
+        def download(url, destination, expected=None):
+            destination.write_bytes(body)
+
+        with patch.object(update, "desktop_directory", return_value=desktop_dir), \
+             patch.object(update, "command_directory", return_value=command_dir):
+            update.install_integrations(entry)
+            with patch.object(update, "github_release", return_value=release), \
+                 patch.object(update, "download_asset", side_effect=download):
+                self.assertTrue(update.update_tracked(entry, apply=True))
+
+        target = self.directory / "Loaf-v2.0.0-x86_64.AppImage"
+        self.assertEqual(entry["path"], str(target))
+        self.assertIn(str(target), (command_dir / "loaf").read_text())
+        self.assertNotIn(str(old), (command_dir / "loaf").read_text())
+        self.assertIn('Exec="' + str(command_dir / "loaf") + '" %U',
+                      (desktop_dir / "loaf.desktop").read_text())
+
+    def test_update_repairs_missing_integrations_for_current_release(self):
+        image = self.image("Example-2.0.0.AppImage")
+        body = b"current release"
+        image.write_bytes(body)
+        entry = {
+            "path": str(image),
+            "repo": "owner/repo",
+            "version": "v2.0.0",
+            "desktop": True,
+            "desktop_name": "Example",
+            "desktop_id": "example.desktop",
+            "commands": ["example"],
+        }
+        desktop_dir = self.directory / "data/applications"
+        command_dir = self.directory / "bin"
+        with patch.object(update, "desktop_directory", return_value=desktop_dir), \
+             patch.object(update, "command_directory", return_value=command_dir), \
+             patch.object(update, "github_release", return_value=self.release(body)):
+            self.assertFalse(update.update_tracked(entry, apply=True))
+        self.assertTrue((command_dir / "example").is_file())
+        self.assertTrue((desktop_dir / "example.desktop").is_file())
+
+    def test_integrations_refuse_to_overwrite_unmanaged_command(self):
+        image = self.image("Example.AppImage")
+        command_dir = self.directory / "bin"
+        command_dir.mkdir()
+        command = command_dir / "example"
+        command.write_text("user-owned command\n")
+        entry = {"path": str(image), "repo": "owner/repo", "commands": ["example"]}
+        with patch.object(update, "command_directory", return_value=command_dir), \
+             self.assertRaisesRegex(ValueError, "refusing to overwrite unmanaged"):
+            update.install_integrations(entry)
+        self.assertEqual(command.read_text(), "user-owned command\n")
+
+    def test_cli_passes_desktop_and_command_options_to_tracking(self):
+        image = self.image("Example.AppImage")
+        argv = [
+            "appimage-update", "--add", "owner/repo", "--desktop",
+            "--name", "Example", "--desktop-id", "example.desktop",
+            "--icon", "example-icon", "--mime-type", "inode/directory",
+            "--command", "example", str(image),
+        ]
+        with patch("sys.argv", argv), patch.object(update, "load_manifest", return_value={}), \
+             patch.object(update, "add_source") as add:
+            self.assertEqual(update.main(), 0)
+        self.assertEqual(add.call_args.args[:2], (image, "owner/repo"))
+        self.assertEqual(add.call_args.kwargs["desktop"], True)
+        self.assertEqual(add.call_args.kwargs["desktop_name"], "Example")
+        self.assertEqual(add.call_args.kwargs["desktop_id"], "example.desktop")
+        self.assertEqual(add.call_args.kwargs["icon"], "example-icon")
+        self.assertEqual(add.call_args.kwargs["mime_types"], ["inode/directory"])
+        self.assertEqual(add.call_args.kwargs["commands"], ["example"])
 
     def test_tracked_update_renames_and_prunes_old_copy(self):
         old = self.image("Example-1.0.0.AppImage")

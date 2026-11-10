@@ -9,6 +9,11 @@ command.
    that have no embedded update information.
 2. Apps with embedded AppImageUpdate information — via `appimageupdatetool`.
 
+For GitHub-tracked apps, it can also create desktop entries and explicit command
+wrappers. These integrations follow versioned AppImage filenames when an app is
+updated. Command names are opt-in; the tool never exposes every binary inside an
+AppImage automatically.
+
 ## Requirements
 
 - Python 3.11+ (`hashlib.file_digest`)
@@ -75,11 +80,33 @@ appimage-update --add owner/repo --arch aarch64
 `--add` without a path looks for one matching local file, or downloads the
 latest release to `~/Applications` when combined with `--update`.
 
+Create a desktop entry and command-line launcher for a tracked AppImage:
+
+```sh
+appimage-update --add m-uvex/loaf-fm \
+  --desktop --name Loaf --icon system-file-manager \
+  --mime-type inode/directory --command loaf \
+  ~/Applications/Loaf-v0.3.0-x86_64.AppImage
+```
+
+`--desktop` generates a `.desktop` entry in `${XDG_DATA_HOME:-~/.local/share}/applications`.
+`--name` defaults to a name inferred from the asset filename, while `--icon`
+defaults to `application-x-executable`. Repeat `--mime-type` for additional
+associations; `--desktop-id` can override the generated `.desktop` filename.
+
+Each `--command NAME` creates an executable wrapper in `~/.local/bin` that runs
+the AppImage and forwards its arguments. Repeat it to add more command names, or
+set `APPIMAGE_UPDATE_BIN_DIR` to use another command directory. Existing files
+that were not created by this tool are never overwritten. Desktop entries and
+command wrappers are refreshed when a tracked AppImage changes filename.
+
 Stop tracking an app (the file is kept):
 
 ```sh
 appimage-update --remove ~/Applications/Some.AppImage
 ```
+
+This removes update tracking only; the AppImage and any generated launchers remain.
 
 ### Options
 
@@ -97,6 +124,12 @@ options:
   -r, --remove               stop tracking an AppImage (keeps the file)
   --asset REGEX              select the matching release asset for --add
   --arch ARCH                select release asset for this architecture (default: host)
+  --desktop                  generate a desktop entry for --add
+  --name NAME                desktop display name (requires --desktop)
+  --desktop-id ID.desktop    desktop entry filename
+  --icon ICON                desktop icon name
+  --mime-type MIME           desktop MIME association; may be repeated
+  --command NAME             create a command wrapper; may be repeated
 
 Paths default to ~/Desktop and ~/Applications. Add by repo: --add OWNER/REPO or GitHub URL.
 ```
@@ -111,8 +144,9 @@ The manifest lives at:
 ${XDG_CONFIG_HOME:-~/.config}/appimage-update/sources.json
 ```
 
-Each entry records the absolute path, repository, asset pattern, and the
-installed release tag. The manifest is written atomically with mode `0600`.
+Each entry records the absolute path, repository, asset pattern, and installed
+release tag. Optional desktop and command integration settings are stored with
+the tracked source. The manifest is written atomically with mode `0600`.
 
 When a GitHub release publishes a `sha256:` digest, downloads are verified
 against it. If no digest is published, the tool records the installed release

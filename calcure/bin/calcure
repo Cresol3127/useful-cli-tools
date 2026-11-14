@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+PYTHON_BIN="/nix/store/zj3zipc5pa4yrxxqvgdb28yinyf9rais-python3-3.14.7-env/bin/python3"
+if [ ! -x "$PYTHON_BIN" ]; then
+    PYTHON_BIN=$(command -v python3)
+fi
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+CALCURE_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+exec "$PYTHON_BIN" "$CALCURE_DIR/calcure/__main__.py" "$@"

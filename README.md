@@ -7,10 +7,11 @@ Each tool lives in its own directory and can be installed independently.
 | --- | --- |
 | [`audiofetch`](audiofetch/) | Download audio from YouTube, or clean up and rewrite audio metadata. |
 | [`appimage-update`](appimage-update/) | Check and update AppImages, including portable apps that lack embedded update information. |
+| [`calcure`](calcure/) | Terminal calendar and journal TUI with Radicale (CalDAV) two-way sync, curses mouse support, and Soft TUI base16 styling. |
 
 ## Install
 
-Clone the repository, then link the scripts into a directory on your `PATH`:
+Clone the repository, then link the scripts and build tools into a directory on your `PATH`:
 
 ```sh
 git clone https://github.com/Cresol3127/useful-cli-tools.git
@@ -18,6 +19,11 @@ cd useful-cli-tools
 mkdir -p ~/.local/bin
 ln -sf "$PWD/audiofetch/audiofetch" ~/.local/bin/audiofetch
 ln -sf "$PWD/appimage-update/appimage_update.py" ~/.local/bin/appimage-update
+
+# Link calcure calendar
+ln -sf "$PWD/calcure/bin/calcure" ~/.local/bin/calcure
+ln -sf ~/.local/bin/calcure ~/.local/bin/cal
+ln -sf ~/.local/bin/calcure ~/.local/bin/calendar
 ```
 
 Both tools are self-contained scripts. See each tool's README for dependencies

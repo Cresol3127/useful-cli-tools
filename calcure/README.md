@@ -252,3 +252,5 @@ All 8 unit tests cover:
 
 - Original project by Roman Anufriev: [anufrievroman/calcure](https://github.com/anufrievroman/calcure)
 - Licensed under the [MIT License](LICENSE).
+
+AI disclosure: AI assisted with the coding of this fork; the ideas, design, and project direction of the original application are Roman Anufriev's original work.

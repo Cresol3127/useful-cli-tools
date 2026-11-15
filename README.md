@@ -50,4 +50,4 @@ PYTHONPATH=calcure python3 -B -m unittest discover -s calcure/tests -v
 MIT. See [LICENSE](LICENSE).
 
 AI disclosure: AI assisted with the coding; the ideas and project direction are
-the author's original work.
+the author's work, while recognizing original upstream authors (such as Roman Anufriev for calcure) for their foundational work.

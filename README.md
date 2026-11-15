@@ -26,7 +26,7 @@ ln -sf ~/.local/bin/calcure ~/.local/bin/cal
 ln -sf ~/.local/bin/calcure ~/.local/bin/calendar
 ```
 
-Both tools are self-contained scripts. See each tool's README for dependencies
+Tools are self-contained or provide their own wrappers. See each tool's README for dependencies
 and usage examples.
 
 ## Requirements
@@ -35,12 +35,14 @@ and usage examples.
   compatible Unix-like systems)
 - `appimage-update`: Python 3.11+, plus `appimageupdatetool` for AppImages that
   do not have a GitHub release source (Linux)
+- `calcure`: Python 3.10+, `caldav`, `icalendar`, `holidays` (Linux, macOS)
 
 ## Tests
 
 ```sh
 python3 -B -m unittest discover -s appimage-update -v
 bash -n audiofetch/audiofetch
+PYTHONPATH=calcure python3 -B -m unittest discover -s calcure/tests -v
 ```
 
 ## License

@@ -136,10 +136,11 @@ class Config:
                 "deadline_icon":             "⚑",
                 }
 
+        default_user = os.environ.get("USER", "user")
         conf["radicale"] = {
                 "enabled":   "Yes",
-                "url":       "http://127.0.0.1:5232/cresol/",
-                "username":  "cresol",
+                "url":       f"http://127.0.0.1:5232/{default_user}/",
+                "username":  default_user,
                 "password":  "",
                 "calendar":  "Official",
                 }
@@ -324,17 +325,19 @@ class Config:
                 self.ICS_TASK_FILES = [str(i) for i in self.ICS_TASK_FILES.split(",")]
 
             # Radicale CalDAV settings:
+            default_user = os.environ.get("USER", "user")
+            default_url  = f"http://127.0.0.1:5232/{default_user}/"
             rad_sec = "radicale" if conf.has_section("radicale") else ("Radicale" if conf.has_section("Radicale") else None)
             if rad_sec:
                 self.RADICALE_ENABLED   = conf.getboolean(rad_sec, "enabled", fallback=True)
-                self.RADICALE_URL       = os.environ.get("RADICALE_URL", conf.get(rad_sec, "url", fallback="http://127.0.0.1:5232/cresol/"))
-                self.RADICALE_USERNAME  = os.environ.get("RADICALE_USERNAME", conf.get(rad_sec, "username", fallback="cresol"))
+                self.RADICALE_URL       = os.environ.get("RADICALE_URL", conf.get(rad_sec, "url", fallback=default_url))
+                self.RADICALE_USERNAME  = os.environ.get("RADICALE_USERNAME", conf.get(rad_sec, "username", fallback=default_user))
                 self.RADICALE_PASSWORD  = os.environ.get("RADICALE_PASSWORD", conf.get(rad_sec, "password", fallback=""))
                 self.RADICALE_CALENDAR  = os.environ.get("RADICALE_CALENDAR", conf.get(rad_sec, "calendar", fallback="Official"))
             else:
                 self.RADICALE_ENABLED   = True
-                self.RADICALE_URL       = os.environ.get("RADICALE_URL", "http://127.0.0.1:5232/cresol/")
-                self.RADICALE_USERNAME  = os.environ.get("RADICALE_USERNAME", "cresol")
+                self.RADICALE_URL       = os.environ.get("RADICALE_URL", default_url)
+                self.RADICALE_USERNAME  = os.environ.get("RADICALE_USERNAME", default_user)
                 self.RADICALE_PASSWORD  = os.environ.get("RADICALE_PASSWORD", "")
                 self.RADICALE_CALENDAR  = os.environ.get("RADICALE_CALENDAR", "Official")
 

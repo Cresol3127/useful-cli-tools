@@ -1,98 +1,254 @@
-# Calcure
+# Calcure (Fork with Two-Way Radicale CalDAV Sync & Soft TUI)
 
+Modern terminal calendar and task manager with two-way Radicale (CalDAV) sync, curses mouse support, non-interactive Quickshell CLI flags, and a Soft TUI Base16 ANSI palette.
 
-Modern TUI calendar and task manager with customizable interface. Manages your events and tasks, displays birthdays from your [abook](https://abook.sourceforge.io/), and can import events and tasks from [calcurse](https://github.com/lfos/calcurse).
-
-[See documentation](https://anufrievroman.gitbook.io/calcure/) for more information.
+Forked from [Roman Anufriev's calcure](https://github.com/anufrievroman/calcure).
 
 ![screenshot](screenshot.png)
 
 ## Features
 
-- Vim keys
-- View tasks and events from .ics files synced with clouds
-- Operation with fewest key presses possible
-- Todo list with subtasks, deadlines, and timers
-- Birthdays of your abook contacts
-- Import of events and tasks from calcurse
-- Icons according to the name ✈ ⛷ ⛱
-- Private events and tasks •••••
-- Plain text database in your folder for cloud sync
-- Customizable colors, icons, and other features
-- Resize and mobile friendly
-- Current weather ⛅
-- Support for [Persian calendar](https://en.wikipedia.org/wiki/Iranian_calendars)
+- **Two-Way Radicale / CalDAV Sync**: Real-time bi-directional synchronization for additions, edits, deletions, moves, and priority changes with automatic timed vs. all-day event parsing (`HH:MM` or `HH:MM-HH:MM`).
+- **Curses Mouse Support**: Scroll through months or days with mouse wheel, click to select dates, double-click to toggle daily view, and click to switch between calendar and task panes.
+- **Non-Interactive CLI Flags**: Fast `--json` and `--add` flags for integration with desktop shells (e.g., Quickshell), status bars (Waybar, Polybar), and notification scripts without starting the curses TUI.
+- **Soft TUI Base16 Palette**: Adheres to the Soft TUI specification using standard 16-color ANSI terminal indices and transparent background (`-1`), effortlessly matching any terminal theme (Foot, Kitty, Alacritty, etc.).
+- **Vim Navigation**: Full keyboard navigation with `h`/`j`/`k`/`l` or arrow keys.
+- **Task & Journal Management**: Todo list with subtasks, deadlines, and timers.
+- **Contact Birthdays**: Displays birthdays from your [abook](https://abook.sourceforge.io/) database.
+- **Weather & Moon Phases**: Integrated optional weather forecast and lunar phases.
 
+---
 
-## Installation
+## Requirements & Dependencies
 
-### Linux and Mac OS
+- **Python**: 3.10 or newer.
+- **Python Libraries**:
+  - `caldav` (for Radicale CalDAV sync)
+  - `icalendar` (for RFC 5545 iCalendar serialization)
+  - `holidays` (for official holiday display)
+  - `windows-curses` (Windows only)
 
-There are several ways to install:
+### Installation
 
-`pipx install calcure` - the up-to-date version from PyPi. You may need to install `pipx` first.
+Clone the repository and symlink the wrapper script to your `PATH`:
 
-`yay -S calcure` - [AUR package](https://aur.archlinux.org/packages/calcure) is available. Upvote to support the project!
+```sh
+mkdir -p ~/.local/bin
+ln -sf "$PWD/calcure/bin/calcure" ~/.local/bin/calcure
+ln -sf ~/.local/bin/calcure ~/.local/bin/cal
+ln -sf ~/.local/bin/calcure ~/.local/bin/calendar
+```
 
-`calcure` is also available as NixOS package.
+The bundled `bin/calcure` launcher automatically resolves an available Python interpreter with `caldav`, `icalendar`, and `holidays` installed, and on NixOS will automatically build a local GC-rooted Python environment if missing.
 
-### Windows
+Alternatively, install the dependencies into your system or virtual environment:
 
-1. Install [Windows Terminal](https://apps.microsoft.com/detail/9n0dx20hk701?hl=en-US&gl=US) app from the Microsoft Store.
-2. Install [Python 3.x](https://apps.microsoft.com/search/publisher?name=Python+Software+Foundation&hl=en-us&gl=US) also from the Microsoft Store (if you just type `python` in the Windows Terminal app it will offer you to install)
-3. Install the program and libraries by typing in the Windows Terminal `pip install windows-curses calcure`
-4. Now you can finally run it by typing in the Windows Terminal `python -m calcure`
+```sh
+pip install caldav icalendar holidays
+```
 
-### Upgrade to the most recent version
+---
 
-`pipx upgrade calcure`
+## Radicale (CalDAV) Two-Way Sync
 
-### Dependencies
+`calcure` synchronizes events and tasks with any standard CalDAV server (such as [Radicale](https://radicale.org/)) or local Radicale filesystem collections.
 
-- `python` 3.10 and higher (usually already installed)
-- `holidays` and `icalendar` python libraries (should be installed automatically with the calcure).
-- `windows-curses` on Windows
+### Configuration
 
-## Usage
+Add or edit the `[radicale]` section in `~/.config/calcure/config.ini`:
 
-Run `calcure` in your terminal. You may need to restart your terminal after the install.
+```ini
+[radicale]
+enabled = Yes
+url = http://127.0.0.1:5232/username/
+username = username
+password = secret
+calendar = Official
+```
 
-### Syncing with cloud calendars
+### Environment Variables
 
-[This page in documentation](https://anufrievroman.gitbook.io/calcure/syncing-with-clouds) shows examples how to sync and display in read-only mode events and tasks from Nextcloud, Google, and other calendars.
+Environment variables override `config.ini` settings:
 
-### User arguments
+- `RADICALE_URL`: Full CalDAV calendar collection or principal URL (e.g. `http://127.0.0.1:5232/cresol/`). Set to `"local"` to force local directory discovery.
+- `RADICALE_USERNAME`: CalDAV authentication username.
+- `RADICALE_PASSWORD`: CalDAV authentication password.
+- `RADICALE_CALENDAR`: Target calendar name (default: `Official`).
 
-[Various user arguments](https://anufrievroman.gitbook.io/calcure/user-arguments) can be added started in special mods add tasks and events etc.
+### Local Radicale Fallback
 
-### Key bindings
+If the remote CalDAV endpoint is unreachable, unauthenticated, or set to `"local"`, `calcure` automatically falls back to reading and writing directly to local Radicale collection directories located at:
 
-[List of all key bindings](https://anufrievroman.gitbook.io/calcure/keys) can be accessed in the wiki and via `?` key in the program. The keys can be customized by creating `keybindings.ini` file, as [explained in documentation](https://anufrievroman.gitbook.io/calcure/keys).
+```
+~/.local/share/radicale/collections/collection-root/<username>/
+```
 
-### Settings
+### Timed vs. All-Day Event Handling
 
-[Example of config.ini file](https://anufrievroman.gitbook.io/calcure/default-config) and [explanations of all settings](https://anufrievroman.gitbook.io/calcure/settings) are available in the documentation.
-On the first run, program will create a `config.ini` file where you can edit parameters, colors, and icons at `~/.config/calcure/config.ini`.
+- **Timed Events**: Any event whose name begins with `HH:MM Title` or `HH:MM-HH:MM Title` (e.g., `10:00 Team Standup` or `14:00-15:30 Architecture Review`) is parsed into timezone-aware `DTSTART` and `DTEND` iCalendar components.
+- **All-Day Events**: Events without a leading time prefix are stored as date-only `DTSTART` components.
+- **Priority**: Events marked as important (`i` in the TUI) are synchronized with CalDAV `PRIORITY: 1`.
+- **Privacy**: Events toggled as private (`p` in the TUI) are synchronized with CalDAV `CLASS: PRIVATE`.
 
-### Setting daily reminders
+---
 
-You can try [this project](https://github.com/sponkurtus2/calcxporte_r) to receive daily reminders of events in your Calcure.
+## Mouse Support
 
-### Troubleshooting
+Curses mouse interactions are enabled by default:
 
-[Typical problems and solutions](https://anufrievroman.gitbook.io/calcure/troubleshooting) are described in documentation. If you faced a new problem, don't hesitate to open an issue.
+| Action | Result |
+| --- | --- |
+| **Mouse Wheel Up** | Navigate to previous month (or previous day/week in Daily/Weekly views) |
+| **Mouse Wheel Down** | Navigate to next month (or next day/week in Daily/Weekly views) |
+| **Left Click on Date Cell** | Select and move cursor to that day |
+| **Double Click on Date Cell** | Select date and toggle directly into Daily view |
+| **Left Click on Panes** | Switch active focus between Calendar and Journal/Tasks panes |
 
+---
 
-## Contribution
+## Non-Interactive CLI Flags
 
-[Full information about contribution](https://anufrievroman.gitbook.io/calcure/contribution) is available in the documentation.
+Ideal for shell scripts, Waybar/Polybar modules, or desktop shells like Quickshell:
 
-## Support
+### 1. JSON Export (`--json`)
 
-I am not a professional developer and work on open-source projects in my free time. If you'd like to support the development, consider donations via [buymeacoffee](https://www.buymeacoffee.com/angryprofessor) or cryptocurrencies:
+Outputs events for the given month as a clean JSON array:
 
-- BTC `bc1qpkzmutdqfxkce34skt09vll97s5smpa0r2tyzj`
-- ETH `0x6f1Ce9cA181458Fc153a5f7cBF88044736C3b00C`
-- BNB `0x40f22c372758E35C905458cAF8BB17f51ac133d1`
-- LTC `ltc1qtu33qyv2xlzxda5mmrmk943zpksq8q75tuh85p`
-- XMR `4AHRhpNYUZcPVN78rbUWAzBuvMKQdpwStS5L3kjunnBMWWW2pjYBko1RUF6nQVpgQPdfAkM3jrEWrWKDHz1h4Ucd4gFCZ9j`
+```sh
+# Current month
+calcure --json
+
+# Specific month (YYYY-MM)
+calcure --json --month 2026-11
+```
+
+**JSON Output Format:**
+
+```json
+[
+  {
+    "uid": "beef632d-1b79-4ae7-bde6-af6f760895ed@calendula",
+    "date": "2026-11-17",
+    "day": 17,
+    "title": "DSA CIE 2",
+    "time": "11:00",
+    "allDay": false,
+    "important": false
+  }
+]
+```
+
+### 2. Fast Event Addition (`--add`)
+
+Creates a new event and immediately writes it to local storage and Radicale without opening the TUI:
+
+```sh
+# Add an all-day event for today
+calcure --add "File Taxes"
+
+# Add an all-day event for a specific date
+calcure --add "Project Milestone" --date 2026-11-20
+
+# Add a timed event with specific hour/minute
+calcure --add "Team Sync" --date 2026-11-20 --time 10:00
+
+# Add a timed event with a duration range
+calcure --add "Design Review" --date 2026-11-20 --time 14:00-15:30
+```
+
+---
+
+## Soft TUI Base16 Color Configuration
+
+`calcure` uses base16 ANSI indices (`0`–`15`) and `-1` for transparent terminal backgrounds, allowing the calendar to cleanly inherit your terminal's color palette:
+
+```ini
+[Colors]
+color_today = 3
+color_events = 7
+color_days = 7
+color_day_names = 8
+color_weekends = 7
+color_weekend_names = 8
+color_hints = 8
+color_prompts = 3
+color_confirmations = 1
+color_birthdays = 3
+color_holidays = 8
+color_holidays_date = 8
+color_todo = 7
+color_done = 8
+color_title = 3
+color_calendar_header = 3
+color_important = 3
+color_unimportant = 8
+color_timer = 3
+color_timer_paused = 8
+color_time = 7
+color_deadlines = 1
+color_weather = 3
+color_active_pane = 3
+color_separator = 8
+color_calendar_border = 8
+color_frame = 8
+color_foreground = 7
+color_background = -1
+```
+
+---
+
+## Keyboard Shortcuts
+
+Press `?` at any time inside `calcure` to view the built-in help and keybindings screen.
+
+### Navigation
+
+- `h`, `j`, `k`, `l` or arrow keys: Move selection (day/task)
+- `m`: Switch to Monthly view
+- `w`: Switch to Weekly view
+- `d`: Switch to Daily view
+- `g`: Jump to today
+- `Tab`: Switch focus between Calendar and Journal/Tasks pane
+
+### Event Management
+
+- `a`: Add event to selected date
+- `e`: Edit selected event
+- `x`: Delete selected event
+- `m` / `M`: Move event to another day / month
+- `i`: Toggle important status
+- `p`: Toggle private status
+- `r`: Reload events from storage
+
+### Task Management
+
+- `a`: Add a new task
+- `e`: Edit selected task
+- `x`: Delete selected task
+- `space`: Toggle task completed (`done`)
+- `s`: Add subtask
+- `u`: Change task urgency/priority
+
+---
+
+## Running Tests
+
+Run the unit test suite:
+
+```sh
+PYTHONPATH=calcure python3 -B -m unittest discover -s calcure/tests -v
+```
+
+All 8 unit tests cover:
+- Event title truncation logic
+- Hiding completed ICS tasks in calendar deadlines
+- Two-way Radicale CalDAV storage and synchronization lifecycle
+- Timed and all-day VEVENT serialization
+- Time prefix regex parsing (`HH:MM` and `HH:MM-HH:MM`)
+
+---
+
+## License & Credits
+
+- Original project by Roman Anufriev: [anufrievroman/calcure](https://github.com/anufrievroman/calcure)
+- Licensed under the [MIT License](LICENSE).

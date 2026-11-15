@@ -105,7 +105,7 @@ class RadicaleStorage:
                 pass
 
         # 2. Local Radicale collections fallback if remote CalDAV failed or was unauthorized
-        user = self.username or os.environ.get("USER", "cresol")
+        user = self.username or os.environ.get("USER", "user")
         local_base = Path.home() / ".local/share/radicale/collections/collection-root" / user
         if local_base.is_dir():
             target_dir = None

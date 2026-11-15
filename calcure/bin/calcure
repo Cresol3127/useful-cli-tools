@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 # Resolve Python environment with caldav, icalendar, and holidays
+LOCAL_ENV="${XDG_DATA_HOME:-$HOME/.local/share}/calcure-env/bin/python3"
 CANDIDATES=(
-    "/home/cresol/.local/share/calcure-env/bin/python3"
+    "$LOCAL_ENV"
     "$(which qs-calendar-bridge 2>/dev/null && sed -n 's/.*exec \([^ ]*\)\/bin\/python3.*/\1\/bin\/python3/p' "$(which qs-calendar-bridge)")"
     "/nix/store/zj3zipc5pa4yrxxqvgdb28yinyf9rais-python3-3.14.7-env/bin/python3"
 )
@@ -22,10 +23,11 @@ if [ -z "$PYTHON_BIN" ]; then
         PYTHON_BIN="$(command -v python3)"
     else
         # Auto-create GC root if needed
-        mkdir -p "/home/cresol/.local/share"
-        nix-build -E 'with import <nixpkgs> {}; python3.withPackages (ps: [ ps.caldav ps.icalendar ps.holidays ])' -o /home/cresol/.local/share/calcure-env >/dev/null 2>&1 || true
-        if [ -x "/home/cresol/.local/share/calcure-env/bin/python3" ]; then
-            PYTHON_BIN="/home/cresol/.local/share/calcure-env/bin/python3"
+        DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+        mkdir -p "$DATA_DIR"
+        nix-build -E 'with import <nixpkgs> {}; python3.withPackages (ps: [ ps.caldav ps.icalendar ps.holidays ])' -o "$DATA_DIR/calcure-env" >/dev/null 2>&1 || true
+        if [ -x "$DATA_DIR/calcure-env/bin/python3" ]; then
+            PYTHON_BIN="$DATA_DIR/calcure-env/bin/python3"
         else
             PYTHON_BIN="$(command -v python3)"
         fi

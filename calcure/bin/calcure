@@ -1,7 +1,35 @@
 #!/usr/bin/env bash
-PYTHON_BIN="/nix/store/zj3zipc5pa4yrxxqvgdb28yinyf9rais-python3-3.14.7-env/bin/python3"
-if [ ! -x "$PYTHON_BIN" ]; then
-    PYTHON_BIN=$(command -v python3)
+
+# Resolve Python environment with caldav, icalendar, and holidays
+CANDIDATES=(
+    "/home/cresol/.local/share/calcure-env/bin/python3"
+    "$(which qs-calendar-bridge 2>/dev/null && sed -n 's/.*exec \([^ ]*\)\/bin\/python3.*/\1\/bin\/python3/p' "$(which qs-calendar-bridge)")"
+    "/nix/store/zj3zipc5pa4yrxxqvgdb28yinyf9rais-python3-3.14.7-env/bin/python3"
+)
+
+PYTHON_BIN=""
+for candidate in "${CANDIDATES[@]}"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        if "$candidate" -c "import caldav, icalendar, holidays" 2>/dev/null; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+    if [ -x "$(command -v python3)" ] && python3 -c "import caldav, icalendar, holidays" 2>/dev/null; then
+        PYTHON_BIN="$(command -v python3)"
+    else
+        # Auto-create GC root if needed
+        mkdir -p "/home/cresol/.local/share"
+        nix-build -E 'with import <nixpkgs> {}; python3.withPackages (ps: [ ps.caldav ps.icalendar ps.holidays ])' -o /home/cresol/.local/share/calcure-env >/dev/null 2>&1 || true
+        if [ -x "/home/cresol/.local/share/calcure-env/bin/python3" ]; then
+            PYTHON_BIN="/home/cresol/.local/share/calcure-env/bin/python3"
+        else
+            PYTHON_BIN="$(command -v python3)"
+        fi
+    fi
 fi
 
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
